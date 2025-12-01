@@ -1,8 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import './App.css';
-import { Clock, MapPin, User, Calendar, CheckCircle, XCircle, Loader, ChevronDown, ChevronUp } from 'lucide-react';
 
-const EcoTechAssignmentTester = () => {
+// Default algorithm parameters (matching your Cloud Function)
+const DEFAULT_PARAMS = {
+  maxTravelTimeSeconds: 7200,
+  maxAppointmentsPerDay: 5,
+  maxNewAssignmentsPerDay: 4,
+  minGapMinutes: 30,
+  appointmentDurationMinutes: 75,
+  weights: {
+    performance: 0.35,
+    proximity: 0.30,
+    capacity: 0.20,
+    routeEfficiency: 0.15
+  }
+};
+
+function App() {
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -11,16 +25,81 @@ const EcoTechAssignmentTester = () => {
     city: '',
     postalCode: '',
     appointmentDate: '',
-    appointmentTime: '10:00'
+    appointmentTime: ''
   });
 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [logs, setLogs] = useState([]);
-  const [expandedSalesperson, setExpandedSalesperson] = useState(null);
+  const [showParamEditor, setShowParamEditor] = useState(false);
+  const [algorithmParams, setAlgorithmParams] = useState(DEFAULT_PARAMS);
+  const [paramChanges, setParamChanges] = useState({});
+  
+  const logsEndRef = useRef(null);
 
-  // Your Cloud Function URL - replace with actual URL
-  const FUNCTION_URL = 'https://us-central1-ecotech-5166a.cloudfunctions.net/assignSalespersonAndBook';
+  const scrollToBottom = () => {
+    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [logs]);
+
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  const handleParamChange = (path, value) => {
+    setAlgorithmParams(prev => {
+      const newParams = { ...prev };
+      if (path.includes('.')) {
+        const [parent, child] = path.split('.');
+        newParams[parent] = { ...newParams[parent], [child]: parseFloat(value) };
+      } else {
+        newParams[path] = parseInt(value);
+      }
+      return newParams;
+    });
+
+    // Track what changed
+    setParamChanges(prev => ({
+      ...prev,
+      [path]: {
+        original: getNestedValue(DEFAULT_PARAMS, path),
+        current: parseFloat(value) || parseInt(value)
+      }
+    }));
+  };
+
+  const getNestedValue = (obj, path) => {
+    if (path.includes('.')) {
+      const [parent, child] = path.split('.');
+      return obj[parent][child];
+    }
+    return obj[path];
+  };
+
+  const resetParams = () => {
+    setAlgorithmParams(DEFAULT_PARAMS);
+    setParamChanges({});
+  };
+
+  const hasParamChanges = () => {
+    return Object.keys(paramChanges).length > 0;
+  };
+
+  const addLog = (type, message, details = null) => {
+    setLogs(prev => [...prev, {
+      type,
+      message,
+      details,
+      timestamp: new Date().toLocaleTimeString()
+    }]);
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -29,503 +108,674 @@ const EcoTechAssignmentTester = () => {
     setLogs([]);
 
     try {
-      const response = await fetch(FUNCTION_URL, {
+      addLog('info', 'Starting assignment process...');
+      addLog('info', `Using algorithm parameters: ${hasParamChanges() ? 'CUSTOM' : 'DEFAULT'}`, algorithmParams);
+
+      // Your Cloud Function URL
+      const functionUrl = 'https://us-central1-ecotech-5166a.cloudfunctions.net/assignSalespersonAndBook'; // Replace with actual URL
+
+      // Check if function URL is configured
+      if (functionUrl === 'YOUR_CLOUD_FUNCTION_URL' || !functionUrl || functionUrl.includes('YOUR_')) {
+        addLog('error', 'Cloud Function URL not configured!');
+        addLog('error', 'Please update the functionUrl variable in App.jsx (line 148)');
+        setResult({
+          success: false,
+          response: 'Configuration Error: Cloud Function URL not set. Please check the console for details.'
+        });
+        return;
+      }
+
+      addLog('info', 'Sending request to assignment function...');
+
+      const requestBody = {
+        ...formData,
+        algorithmParams: hasParamChanges() ? algorithmParams : undefined
+      };
+
+      addLog('info', 'Request data prepared', requestBody);
+
+      const response = await fetch(functionUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          ...formData,
-          appointmentTime: formData.appointmentTime ? `${formData.appointmentTime}:00` : null
-        })
+        body: JSON.stringify(requestBody)
       });
 
-      const data = await response.json();
-      setResult(data);
-      
-      // Parse logs from response if available
-      if (data.assignmentDetails) {
-        generateLogSummary(data);
+      if (!response.ok) {
+        addLog('error', `HTTP Error: ${response.status} ${response.statusText}`);
+        const errorText = await response.text();
+        addLog('error', 'Response body:', errorText.substring(0, 200));
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
+
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        addLog('error', 'Invalid response type: Expected JSON but got ' + contentType);
+        const errorText = await response.text();
+        addLog('error', 'Response preview:', errorText.substring(0, 200));
+        throw new Error('Invalid response: Expected JSON but received HTML. Check if the Cloud Function URL is correct.');
+      }
+
+      const data = await response.json();
+
+      addLog('success', 'Received response from server');
+
+      // Parse and display detailed results
+      if (data.success) {
+        addLog('success', `✓ Successfully assigned to ${data.salesperson}`);
+        
+        if (data.assignmentDetails) {
+          const details = data.assignmentDetails;
+          
+          addLog('info', 'Assignment Analysis:', {
+            'Travel Time': details.travelTime,
+            'Travel From': details.travelFrom,
+            'Appointments on Date': details.appointmentsOnDate,
+            'Today\'s Assignments': details.todayAssignments,
+            'Final Score': details.scores.final
+          });
+
+          addLog('info', 'Score Breakdown:', {
+            'Performance': `${details.scores.performance} × ${algorithmParams.weights.performance} = ${(parseFloat(details.scores.performance) * algorithmParams.weights.performance).toFixed(4)}`,
+            'Proximity': `${details.scores.proximity} × ${algorithmParams.weights.proximity} = ${(parseFloat(details.scores.proximity) * algorithmParams.weights.proximity).toFixed(4)}`,
+            'Capacity': `${details.scores.capacity} × ${algorithmParams.weights.capacity} = ${(parseFloat(details.scores.capacity) * algorithmParams.weights.capacity).toFixed(4)}`,
+            'Route Efficiency': `${details.scores.routeEfficiency} × ${algorithmParams.weights.routeEfficiency} = ${(parseFloat(details.scores.routeEfficiency) * algorithmParams.weights.routeEfficiency).toFixed(4)}`
+          });
+        }
+
+        if (data.allEvaluations) {
+          addLog('info', `Evaluated ${data.allEvaluations.length} salespeople total`);
+          
+          const qualified = data.allEvaluations.filter(e => !e.disqualified);
+          const disqualified = data.allEvaluations.filter(e => e.disqualified);
+          
+          addLog('info', `Qualified: ${qualified.length}, Disqualified: ${disqualified.length}`);
+          
+          // Show details for each salesperson evaluated
+          data.allEvaluations.forEach(evaluation => {
+            const name = evaluation.name || evaluation.salesperson?.salesperson || 'Unknown';
+            
+            if (evaluation.disqualified) {
+              addLog('info', `❌ ${name} - Disqualified: ${evaluation.disqualificationReason?.replace(/_/g, ' ')}`);
+            } else {
+              const score = evaluation.scores?.final?.toFixed(4) || '0.0000';
+              const travelTime = evaluation.details?.travelText || 'N/A';
+              const appointments = evaluation.details?.appointmentCount || 0;
+              
+              addLog('info', `✓ ${name} - Score: ${score} (Travel: ${travelTime}, Appointments: ${appointments}/${algorithmParams.maxAppointmentsPerDay})`);
+            }
+          });
+          
+          if (disqualified.length > 0) {
+            const reasons = {};
+            disqualified.forEach(e => {
+              const reason = e.disqualificationReason || 'unknown';
+              reasons[reason] = (reasons[reason] || 0) + 1;
+            });
+            addLog('info', 'Disqualification Summary:', reasons);
+          }
+        }
+      } else {
+        addLog('error', data.response || 'Assignment failed');
+        if (data.reason) {
+          addLog('error', `Reason: ${data.reason}`);
+        }
+      }
+
+      setResult(data);
+
     } catch (error) {
       console.error('Error:', error);
+      addLog('error', `Error: ${error.message}`);
       setResult({
         success: false,
-        response: 'Error testing assignment. Please check console.',
-        error: error.message
+        response: 'An error occurred. Please try again.'
       });
     } finally {
       setLoading(false);
     }
   };
 
-  const generateLogSummary = (data) => {
-    const logEntries = [];
-    
-    logEntries.push({
-      type: 'info',
-      message: `Starting assignment process for ${formData.city}`,
-      timestamp: new Date().toISOString()
-    });
-
-    if (data.assignmentDetails) {
-      const details = data.assignmentDetails;
-      
-      logEntries.push({
-        type: 'success',
-        message: `Found qualified salesperson: ${data.salesperson}`,
-        timestamp: new Date().toISOString()
-      });
-
-      if (details.travelTime) {
-        logEntries.push({
-          type: 'info',
-          message: `Travel time from home/office: ${details.travelTime}`,
-          timestamp: new Date().toISOString()
-        });
-      }
-
-      logEntries.push({
-        type: 'info',
-        message: `Salesperson has ${details.appointmentsOnDate} appointment(s) on requested date`,
-        timestamp: new Date().toISOString()
-      });
-
-      logEntries.push({
-        type: 'info',
-        message: `Daily assignments: ${details.todayAssignments}/4`,
-        timestamp: new Date().toISOString()
-      });
-
-      if (details.scores) {
-        logEntries.push({
-          type: 'success',
-          message: `Final assignment score: ${details.scores.final}`,
-          details: {
-            performance: (details.scores.performance * 100).toFixed(1) + '%',
-            proximity: (parseFloat(details.scores.proximity) * 100).toFixed(1) + '%',
-            capacity: (parseFloat(details.scores.capacity) * 100).toFixed(1) + '%',
-            routeEfficiency: (parseFloat(details.scores.routeEfficiency) * 100).toFixed(1) + '%'
-          },
-          timestamp: new Date().toISOString()
-        });
-      }
+  const getLogIcon = (type) => {
+    switch (type) {
+      case 'success':
+        return (
+          <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        );
+      case 'error':
+        return (
+          <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        );
+      default:
+        return (
+          <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        );
     }
-
-    setLogs(logEntries);
-  };
-
-  const handleInputChange = (e) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value
-    });
-  };
-
-  const ScoreBar = ({ label, value, color }) => {
-    const percentage = parseFloat(value);
-    return (
-      <div className="mb-3">
-        <div className="flex justify-between mb-1">
-          <span className="text-sm font-medium text-gray-700">{label}</span>
-          <span className="text-sm text-gray-600">{value}</span>
-        </div>
-        <div className="w-full bg-gray-200 rounded-full h-2">
-          <div
-            className={`h-2 rounded-full ${color}`}
-            style={{ width: `${percentage}%` }}
-          />
-        </div>
-      </div>
-    );
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 py-8 px-4">
-      <div className="max-w-6xl mx-auto">
+      <div className="max-w-6xl mx-auto space-y-6">
+        
         {/* Header */}
-        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="w-12 h-12 bg-red-600 rounded-lg flex items-center justify-center">
-              <User className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">EcoTech Assignment Algorithm Tester</h1>
-              <p className="text-gray-600">Test salesperson assignment logic with sample leads</p>
-            </div>
+        <div className="bg-white rounded-lg shadow-lg p-6">
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">
+            Sales Assignment Algorithm Tester
+          </h1>
+          <p className="text-gray-600">
+            Test the assignment logic and view detailed execution logs
+          </p>
+        </div>
+
+        {/* Algorithm Parameters Panel */}
+        <div className="bg-white rounded-lg shadow-lg p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-gray-900">Algorithm Parameters</h2>
+            <button
+              onClick={() => setShowParamEditor(!showParamEditor)}
+              className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors"
+            >
+              {showParamEditor ? 'Hide Editor' : 'Edit Parameters'}
+            </button>
           </div>
+
+          {showParamEditor && (
+            <div className="space-y-6">
+              {/* Parameter Changes Summary */}
+              {hasParamChanges() && (
+                <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="font-semibold text-blue-900">Active Customizations</h3>
+                    <button
+                      onClick={resetParams}
+                      className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+                    >
+                      Reset to Defaults
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {Object.entries(paramChanges).map(([path, values]) => (
+                      <div key={path} className="flex items-center justify-between text-sm">
+                        <span className="font-medium text-gray-700 capitalize">
+                          {path.replace(/([A-Z])/g, ' $1').replace('.', ' → ')}:
+                        </span>
+                        <span className="text-gray-600">
+                          <span className="line-through">{values.original}</span>
+                          {' → '}
+                          <span className="font-semibold text-blue-600">{values.current}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Time & Capacity Limits */}
+              <div>
+                <h3 className="font-semibold text-gray-900 mb-3">Time & Capacity Limits</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Max Travel Time (seconds)
+                    </label>
+                    <input
+                      type="number"
+                      value={algorithmParams.maxTravelTimeSeconds}
+                      onChange={(e) => handleParamChange('maxTravelTimeSeconds', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Default: {DEFAULT_PARAMS.maxTravelTimeSeconds}s (2 hours)
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Max Appointments Per Day
+                    </label>
+                    <input
+                      type="number"
+                      value={algorithmParams.maxAppointmentsPerDay}
+                      onChange={(e) => handleParamChange('maxAppointmentsPerDay', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Default: {DEFAULT_PARAMS.maxAppointmentsPerDay}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Max New Assignments Per Day
+                    </label>
+                    <input
+                      type="number"
+                      value={algorithmParams.maxNewAssignmentsPerDay}
+                      onChange={(e) => handleParamChange('maxNewAssignmentsPerDay', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Default: {DEFAULT_PARAMS.maxNewAssignmentsPerDay}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Min Gap Between Appointments (minutes)
+                    </label>
+                    <input
+                      type="number"
+                      value={algorithmParams.minGapMinutes}
+                      onChange={(e) => handleParamChange('minGapMinutes', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Default: {DEFAULT_PARAMS.minGapMinutes} minutes
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Appointment Duration (minutes)
+                    </label>
+                    <input
+                      type="number"
+                      value={algorithmParams.appointmentDurationMinutes}
+                      onChange={(e) => handleParamChange('appointmentDurationMinutes', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Default: {DEFAULT_PARAMS.appointmentDurationMinutes} minutes
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Scoring Weights */}
+              <div>
+                <h3 className="font-semibold text-gray-900 mb-3">Scoring Weights</h3>
+                <p className="text-sm text-gray-600 mb-3">
+                  These weights determine how much each factor contributes to the final score. They should sum to 1.0.
+                  <span className="font-semibold ml-2">
+                    Current sum: {Object.values(algorithmParams.weights).reduce((a, b) => a + b, 0).toFixed(2)}
+                  </span>
+                </p>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Performance Weight
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="1"
+                      value={algorithmParams.weights.performance}
+                      onChange={(e) => handleParamChange('weights.performance', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Default: {DEFAULT_PARAMS.weights.performance} (35%)
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Proximity Weight
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="1"
+                      value={algorithmParams.weights.proximity}
+                      onChange={(e) => handleParamChange('weights.proximity', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Default: {DEFAULT_PARAMS.weights.proximity} (30%)
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Capacity Weight
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="1"
+                      value={algorithmParams.weights.capacity}
+                      onChange={(e) => handleParamChange('weights.capacity', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Default: {DEFAULT_PARAMS.weights.capacity} (20%)
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Route Efficiency Weight
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="1"
+                      value={algorithmParams.weights.routeEfficiency}
+                      onChange={(e) => handleParamChange('weights.routeEfficiency', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Default: {DEFAULT_PARAMS.weights.routeEfficiency} (15%)
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          
           {/* Input Form */}
           <div className="bg-white rounded-lg shadow-lg p-6">
-            <h2 className="text-xl font-semibold text-gray-900 mb-4">Lead Information</h2>
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Lead Information</h2>
             
             <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    First Name *
-                  </label>
+                  <label htmlFor="firstName">First Name</label>
                   <input
                     type="text"
+                    id="firstName"
                     name="firstName"
                     value={formData.firstName}
                     onChange={handleInputChange}
                     required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                    placeholder="John"
                   />
                 </div>
+                
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Last Name *
-                  </label>
+                  <label htmlFor="lastName">Last Name</label>
                   <input
                     type="text"
+                    id="lastName"
                     name="lastName"
                     value={formData.lastName}
                     onChange={handleInputChange}
                     required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                    placeholder="Smith"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Phone Number *
-                </label>
+                <label htmlFor="phone">Phone Number</label>
                 <input
                   type="tel"
+                  id="phone"
                   name="phone"
                   value={formData.phone}
                   onChange={handleInputChange}
+                  placeholder="416-555-1234"
                   required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                  placeholder="416-555-0123"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Address
-                </label>
+                <label htmlFor="address">Street Address</label>
                 <input
                   type="text"
+                  id="address"
                   name="address"
                   value={formData.address}
                   onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                  placeholder="123 Main Street"
+                  placeholder="123 Main St"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    City *
-                  </label>
+                  <label htmlFor="city">City</label>
                   <input
                     type="text"
+                    id="city"
                     name="city"
                     value={formData.city}
                     onChange={handleInputChange}
-                    required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
                     placeholder="Toronto"
+                    required
                   />
                 </div>
+                
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Postal Code
-                  </label>
+                  <label htmlFor="postalCode">Postal Code</label>
                   <input
                     type="text"
+                    id="postalCode"
                     name="postalCode"
                     value={formData.postalCode}
                     onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                    placeholder="M5H 2N2"
+                    placeholder="M5V 3A8"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Appointment Date
-                  </label>
-                  <div className="relative">
-                    <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-                    <input
-                      type="date"
-                      name="appointmentDate"
-                      value={formData.appointmentDate}
-                      onChange={handleInputChange}
-                      className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                    />
-                  </div>
+                  <label htmlFor="appointmentDate">Appointment Date</label>
+                  <input
+                    type="date"
+                    id="appointmentDate"
+                    name="appointmentDate"
+                    value={formData.appointmentDate}
+                    onChange={handleInputChange}
+                  />
                 </div>
+                
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Appointment Time
-                  </label>
-                  <div className="relative">
-                    <Clock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-                    <input
-                      type="time"
-                      name="appointmentTime"
-                      value={formData.appointmentTime}
-                      onChange={handleInputChange}
-                      className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                    />
-                  </div>
+                  <label htmlFor="appointmentTime">Appointment Time</label>
+                  <input
+                    type="time"
+                    id="appointmentTime"
+                    name="appointmentTime"
+                    value={formData.appointmentTime}
+                    onChange={handleInputChange}
+                  />
                 </div>
               </div>
 
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white font-semibold py-3 px-4 rounded-lg transition-colors duration-200 flex items-center justify-center gap-2"
+                className="w-full py-3 px-4 bg-gray-900 text-white rounded-lg font-semibold hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {loading ? (
-                  <>
-                    <Loader className="w-5 h-5 animate-spin" />
+                  <span className="flex items-center justify-center">
+                    <svg className="animate-spin h-5 w-5 mr-3" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
                     Processing...
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle className="w-5 h-5" />
-                    Test Assignment
-                  </>
-                )}
+                  </span>
+                ) : 'Assign Salesperson'}
               </button>
             </form>
           </div>
 
-          {/* Results Panel */}
-          <div className="space-y-6">
-            {/* Assignment Result */}
-            {result && (
-              <div className={`rounded-lg shadow-lg p-6 ${result.success ? 'bg-green-50 border-2 border-green-200' : 'bg-red-50 border-2 border-red-200'}`}>
-                <div className="flex items-start gap-3 mb-4">
-                  {result.success ? (
-                    <CheckCircle className="w-6 h-6 text-green-600 flex-shrink-0 mt-1" />
-                  ) : (
-                    <XCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-1" />
-                  )}
-                  <div className="flex-1">
-                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                      {result.success ? 'Assignment Successful' : 'Assignment Failed'}
-                    </h3>
-                    <p className="text-gray-700">{result.response}</p>
-                  </div>
-                </div>
-
-                {result.success && result.salesperson && (
-                  <div className="mt-4 pt-4 border-t border-gray-200">
-                    <div className="grid grid-cols-2 gap-4 mb-4">
-                      <div>
-                        <p className="text-sm text-gray-600">Assigned Salesperson</p>
-                        <p className="font-semibold text-gray-900">{result.salesperson}</p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-gray-600">Salesperson ID</p>
-                        <p className="font-semibold text-gray-900">{result.salespersonId}</p>
-                      </div>
+          {/* Execution Logs */}
+          <div className="bg-white rounded-lg shadow-lg p-6">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Execution Logs</h2>
+            
+            <div className="bg-gray-50 rounded-lg p-4 max-h-96 overflow-y-auto space-y-3">
+              {logs.length === 0 ? (
+                <p className="text-gray-500 text-center py-8">
+                  No logs yet. Submit the form to see execution details.
+                </p>
+              ) : (
+                logs.map((log, index) => (
+                  <div
+                    key={index}
+                    className={`log-entry ${
+                      log.type === 'success' ? 'log-success' :
+                      log.type === 'error' ? 'log-error' : 'log-info'
+                    }`}
+                  >
+                    <div className="flex-shrink-0">
+                      {getLogIcon(log.type)}
                     </div>
-
-                    {result.appointmentDate && (
-                      <div className="mb-4">
-                        <p className="text-sm text-gray-600">Appointment Scheduled</p>
-                        <p className="font-semibold text-gray-900">{result.appointmentDate}</p>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between">
+                        <p className="font-medium text-gray-900">{log.message}</p>
+                        <span className="text-xs text-gray-500">{log.timestamp}</span>
                       </div>
-                    )}
-
-                    {result.assignmentDetails && result.assignmentDetails.scores && (
-                      <div className="mt-4 pt-4 border-t border-gray-200">
-                        <h4 className="font-semibold text-gray-900 mb-3">Assignment Scores</h4>
-                        <ScoreBar 
-                          label="Performance Score" 
-                          value={result.assignmentDetails.scores.performance} 
-                          color="bg-blue-500"
-                        />
-                        <ScoreBar 
-                          label="Proximity Score" 
-                          value={result.assignmentDetails.scores.proximity} 
-                          color="bg-green-500"
-                        />
-                        <ScoreBar 
-                          label="Capacity Score" 
-                          value={result.assignmentDetails.scores.capacity} 
-                          color="bg-purple-500"
-                        />
-                        <ScoreBar 
-                          label="Route Efficiency Score" 
-                          value={result.assignmentDetails.scores.routeEfficiency} 
-                          color="bg-orange-500"
-                        />
-                        <div className="mt-4 pt-3 border-t border-gray-300">
-                          <div className="flex justify-between items-center">
-                            <span className="text-base font-bold text-gray-900">Final Score</span>
-                            <span className="text-2xl font-bold text-red-600">
-                              {result.assignmentDetails.scores.final}
-                            </span>
-                          </div>
+                      {log.details && (
+                        <div className="mt-2 text-sm text-gray-700 bg-white rounded p-2">
+                          <pre className="whitespace-pre-wrap font-mono text-xs">
+                            {typeof log.details === 'object' 
+                              ? JSON.stringify(log.details, null, 2)
+                              : log.details
+                            }
+                          </pre>
                         </div>
-                      </div>
-                    )}
-
-                    {result.assignmentDetails && (
-                      <div className="mt-4 pt-4 border-t border-gray-200">
-                        <h4 className="font-semibold text-gray-900 mb-2">Additional Details</h4>
-                        <div className="space-y-2 text-sm">
-                          {result.assignmentDetails.travelTime && (
-                            <div className="flex items-center gap-2">
-                              <MapPin className="w-4 h-4 text-gray-500" />
-                              <span className="text-gray-700">
-                                Travel Time: <strong>{result.assignmentDetails.travelTime}</strong> from {result.assignmentDetails.travelFrom?.replace('_', ' ')}
-                              </span>
-                            </div>
-                          )}
-                          <div className="flex items-center gap-2">
-                            <Calendar className="w-4 h-4 text-gray-500" />
-                            <span className="text-gray-700">
-                              Appointments on Date: <strong>{result.assignmentDetails.appointmentsOnDate}/5</strong>
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Clock className="w-4 h-4 text-gray-500" />
-                            <span className="text-gray-700">
-                              Today's Assignments: <strong>{result.assignmentDetails.todayAssignments}/4</strong>
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
+                ))
+              )}
+              <div ref={logsEndRef} />
+            </div>
+          </div>
+        </div>
+
+        {/* Results Panel */}
+        {result && (
+          <div className="bg-white rounded-lg shadow-lg p-6">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Assignment Result</h2>
+            
+            <div className={`status-badge ${result.success ? 'status-success' : 'status-error'} mb-4`}>
+              <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {result.success ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 )}
-              </div>
-            )}
+              </svg>
+              {result.success ? 'Assignment Successful' : 'Assignment Failed'}
+            </div>
 
-            {/* Process Logs */}
-            {logs.length > 0 && (
-              <div className="bg-white rounded-lg shadow-lg p-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Assignment Process</h3>
-                <div className="space-y-2 max-h-96 overflow-y-auto">
-                  {logs.map((log, index) => (
-                    <div
-                      key={index}
-                      className={`p-3 rounded-lg ${
-                        log.type === 'success' ? 'bg-green-50 border-l-4 border-green-500' :
-                        log.type === 'error' ? 'bg-red-50 border-l-4 border-red-500' :
-                        'bg-blue-50 border-l-4 border-blue-500'
-                      }`}
-                    >
-                      <div className="flex items-start gap-2">
-                        {log.type === 'success' && <CheckCircle className="w-4 h-4 text-green-600 mt-0.5" />}
-                        {log.type === 'error' && <XCircle className="w-4 h-4 text-red-600 mt-0.5" />}
-                        {log.type === 'info' && <Clock className="w-4 h-4 text-blue-600 mt-0.5" />}
-                        <div className="flex-1">
-                          <p className="text-sm text-gray-800">{log.message}</p>
-                          {log.details && (
-                            <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                              {Object.entries(log.details).map(([key, value]) => (
-                                <div key={key} className="bg-white rounded px-2 py-1">
-                                  <span className="text-gray-600 capitalize">{key}: </span>
-                                  <span className="font-semibold text-gray-900">{value}</span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
+            <div className="space-y-4">
+              <p className="text-gray-700">{result.response}</p>
+
+              {result.success && result.assignmentDetails && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-gray-200">
+                  <div className="space-y-3">
+                    <h3 className="font-semibold text-gray-900">Assignment Details</h3>
+                    <div className="space-y-2">
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Salesperson:</span>
+                        <span className="font-medium">{result.salesperson}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Travel Time:</span>
+                        <span className="font-medium">{result.assignmentDetails.travelTime}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">From:</span>
+                        <span className="font-medium capitalize">{result.assignmentDetails.travelFrom}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Appointments:</span>
+                        <span className="font-medium">{result.assignmentDetails.appointmentsOnDate}/{algorithmParams.maxAppointmentsPerDay}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Today's Assignments:</span>
+                        <span className="font-medium">{result.assignmentDetails.todayAssignments}/{algorithmParams.maxNewAssignmentsPerDay}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <h3 className="font-semibold text-gray-900">Scoring Breakdown</h3>
+                    <div className="space-y-2">
+                      <div>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="text-gray-600">Performance</span>
+                          <span className="font-medium">{result.assignmentDetails.scores.performance}</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div 
+                            className="bg-blue-500 h-2 rounded-full" 
+                            style={{ width: `${Math.min(parseFloat(result.assignmentDetails.scores.performance) * 100, 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="text-gray-600">Proximity</span>
+                          <span className="font-medium">{result.assignmentDetails.scores.proximity}</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div 
+                            className="bg-green-500 h-2 rounded-full" 
+                            style={{ width: `${Math.min(parseFloat(result.assignmentDetails.scores.proximity) * 100, 100)}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="text-gray-600">Capacity</span>
+                          <span className="font-medium">{result.assignmentDetails.scores.capacity}</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div 
+                            className="bg-purple-500 h-2 rounded-full" 
+                            style={{ width: `${Math.min(parseFloat(result.assignmentDetails.scores.capacity) * 100, 100)}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="text-gray-600">Route Efficiency</span>
+                          <span className="font-medium">{result.assignmentDetails.scores.routeEfficiency}</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div 
+                            className="bg-orange-500 h-2 rounded-full" 
+                            style={{ width: `${Math.min(parseFloat(result.assignmentDetails.scores.routeEfficiency) * 100, 100)}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-gray-200">
+                        <div className="flex justify-between font-semibold">
+                          <span className="text-gray-900">Final Score</span>
+                          <span className="text-gray-900">{result.assignmentDetails.scores.final}</span>
                         </div>
                       </div>
                     </div>
-                  ))}
+                  </div>
                 </div>
-              </div>
-            )}
-
-            {/* Info Panel */}
-            {!result && !loading && (
-              <div className="bg-blue-50 rounded-lg shadow-lg p-6 border-2 border-blue-200">
-                <h3 className="text-lg font-semibold text-gray-900 mb-3">How It Works</h3>
-                <div className="space-y-2 text-sm text-gray-700">
-                  <p className="flex items-start gap-2">
-                    <span className="font-semibold text-blue-600">1.</span>
-                    <span>System identifies service area based on city</span>
-                  </p>
-                  <p className="flex items-start gap-2">
-                    <span className="font-semibold text-blue-600">2.</span>
-                    <span>Checks salesperson availability and capacity</span>
-                  </p>
-                  <p className="flex items-start gap-2">
-                    <span className="font-semibold text-blue-600">3.</span>
-                    <span>Calculates travel time and route efficiency</span>
-                  </p>
-                  <p className="flex items-start gap-2">
-                    <span className="font-semibold text-blue-600">4.</span>
-                    <span>Scores candidates based on multiple factors</span>
-                  </p>
-                  <p className="flex items-start gap-2">
-                    <span className="font-semibold text-blue-600">5.</span>
-                    <span>Assigns best-fit salesperson to the lead</span>
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Configuration Info */}
-        <div className="mt-6 bg-white rounded-lg shadow-lg p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-3">Algorithm Configuration</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-            <div className="p-3 bg-gray-50 rounded-lg">
-              <p className="text-gray-600 mb-1">Max Travel Time</p>
-              <p className="text-xl font-bold text-gray-900">120 min</p>
-            </div>
-            <div className="p-3 bg-gray-50 rounded-lg">
-              <p className="text-gray-600 mb-1">Max Appointments/Day</p>
-              <p className="text-xl font-bold text-gray-900">5</p>
-            </div>
-            <div className="p-3 bg-gray-50 rounded-lg">
-              <p className="text-gray-600 mb-1">Max New Assignments/Day</p>
-              <p className="text-xl font-bold text-gray-900">4</p>
-            </div>
-            <div className="p-3 bg-gray-50 rounded-lg">
-              <p className="text-gray-600 mb-1">Min Time Gap</p>
-              <p className="text-xl font-bold text-gray-900">30 min</p>
+              )}
             </div>
           </div>
-          
-          <div className="mt-4 pt-4 border-t border-gray-200">
-            <h4 className="font-semibold text-gray-900 mb-2">Scoring Weights</h4>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-blue-500"></div>
-                <span className="text-gray-700">Performance: <strong>35%</strong></span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                <span className="text-gray-700">Proximity: <strong>30%</strong></span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-purple-500"></div>
-                <span className="text-gray-700">Capacity: <strong>20%</strong></span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-orange-500"></div>
-                <span className="text-gray-700">Route Efficiency: <strong>15%</strong></span>
-              </div>
-            </div>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );
-};
+}
 
-export default EcoTechAssignmentTester;
+export default App;

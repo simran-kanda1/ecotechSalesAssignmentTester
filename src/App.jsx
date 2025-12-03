@@ -423,7 +423,7 @@ function App() {
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
                     />
                     <p className="text-xs text-gray-500 mt-1">
-                      Default: {DEFAULT_PARAMS.weights.performance} (35%)
+                      Default: {DEFAULT_PARAMS.weights.performance} (40%)
                     </p>
                   </div>
 
@@ -441,7 +441,7 @@ function App() {
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
                     />
                     <p className="text-xs text-gray-500 mt-1">
-                      Default: {DEFAULT_PARAMS.weights.proximity} (30%)
+                      Default: {DEFAULT_PARAMS.weights.proximity} (40%)
                     </p>
                   </div>
 
@@ -459,7 +459,7 @@ function App() {
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
                     />
                     <p className="text-xs text-gray-500 mt-1">
-                      Default: {DEFAULT_PARAMS.weights.capacity} (20%)
+                      Default: {DEFAULT_PARAMS.weights.capacity} (5%)
                     </p>
                   </div>
 

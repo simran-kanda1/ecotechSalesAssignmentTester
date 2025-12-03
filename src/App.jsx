@@ -9,9 +9,9 @@ const DEFAULT_PARAMS = {
   minGapMinutes: 30,
   appointmentDurationMinutes: 75,
   weights: {
-    performance: 0.35,
-    proximity: 0.30,
-    capacity: 0.20,
+    performance: 0.4,
+    proximity: 0.4,
+    capacity: 0.05,
     routeEfficiency: 0.15
   }
 };
@@ -112,7 +112,7 @@ function App() {
       addLog('info', `Using algorithm parameters: ${hasParamChanges() ? 'CUSTOM' : 'DEFAULT'}`, algorithmParams);
 
       // Your Cloud Function URL
-      const functionUrl = 'https://us-central1-ecotech-5166a.cloudfunctions.net/assignSalespersonAndBook'; // Replace with actual URL
+      const functionUrl = 'https://us-central1-ecotech-5166a.cloudfunctions.net/assignSalespersonAndBook';
 
       // Check if function URL is configured
       if (functionUrl === 'YOUR_CLOUD_FUNCTION_URL' || !functionUrl || functionUrl.includes('YOUR_')) {

@@ -34,6 +34,7 @@ function App() {
   const [showParamEditor, setShowParamEditor] = useState(false);
   const [algorithmParams, setAlgorithmParams] = useState(DEFAULT_PARAMS);
   const [paramChanges, setParamChanges] = useState({});
+  const [topCandidates, setTopCandidates] = useState([]);
   
   const logsEndRef = useRef(null);
 
@@ -106,6 +107,7 @@ function App() {
     setLoading(true);
     setResult(null);
     setLogs([]);
+    setTopCandidates([]);
 
     try {
       addLog('info', 'Starting assignment process...');
@@ -190,47 +192,66 @@ function App() {
           const qualified = data.allEvaluations.filter(e => !e.disqualified);
           const disqualified = data.allEvaluations.filter(e => e.disqualified);
           
-          addLog('info', `Qualified: ${qualified.length}, Disqualified: ${disqualified.length}`);
-          
-          // Show details for each salesperson evaluated
-          data.allEvaluations.forEach(evaluation => {
-            const name = evaluation.name || evaluation.salesperson?.salesperson || 'Unknown';
-            
-            if (evaluation.disqualified) {
-              addLog('info', `❌ ${name} - Disqualified: ${evaluation.disqualificationReason?.replace(/_/g, ' ')}`);
-            } else {
-              const score = evaluation.scores?.final?.toFixed(4) || '0.0000';
-              const travelTime = evaluation.details?.travelText || 'N/A';
-              const appointments = evaluation.details?.appointmentCount || 0;
-              
-              addLog('info', `✓ ${name} - Score: ${score} (Travel: ${travelTime}, Appointments: ${appointments}/${algorithmParams.maxAppointmentsPerDay})`);
-            }
-          });
+          addLog('info', `${qualified.length} qualified, ${disqualified.length} disqualified`);
           
           if (disqualified.length > 0) {
-            const reasons = {};
+            const disqualificationReasons = {};
             disqualified.forEach(e => {
-              const reason = e.disqualificationReason || 'unknown';
-              reasons[reason] = (reasons[reason] || 0) + 1;
+              const reason = e.disqualificationReason || 'Unknown';
+              disqualificationReasons[reason] = (disqualificationReasons[reason] || 0) + 1;
             });
-            addLog('info', 'Disqualification Summary:', reasons);
+            
+            addLog('info', 'Disqualification Summary:', disqualificationReasons);
           }
+
+          // Get top 3 candidates
+          const sortedQualified = qualified.sort((a, b) => 
+            parseFloat(b.scores.final) - parseFloat(a.scores.final)
+          );
+          const top3 = sortedQualified.slice(0, 3).map((candidate, index) => ({
+            ...candidate,
+            rank: index + 1,
+            isChosen: candidate.name === data.salesperson
+          }));
+          
+          setTopCandidates(top3);
+          addLog('info', `Top 3 Candidates: ${top3.map(c => `${c.rank}. ${c.name} (${c.scores.final})`).join(', ')}`);
         }
+
+        setResult({
+          success: true,
+          salesperson: data.salesperson,
+          response: data.response || `Successfully assigned to ${data.salesperson}`,
+          assignmentDetails: data.assignmentDetails
+        });
+
       } else {
         addLog('error', data.response || 'Assignment failed');
-        if (data.reason) {
-          addLog('error', `Reason: ${data.reason}`);
+        
+        if (data.allEvaluations) {
+          const disqualified = data.allEvaluations.filter(e => e.disqualified);
+          addLog('error', `All ${disqualified.length} candidates were disqualified`);
+          
+          const reasons = {};
+          disqualified.forEach(e => {
+            const reason = e.disqualificationReason || 'Unknown';
+            reasons[reason] = (reasons[reason] || 0) + 1;
+          });
+          addLog('error', 'Reasons:', reasons);
         }
+        
+        setResult({
+          success: false,
+          response: data.response || 'No suitable salesperson could be assigned'
+        });
       }
-
-      setResult(data);
 
     } catch (error) {
       console.error('Error:', error);
-      addLog('error', `Error: ${error.message}`);
+      addLog('error', 'Request failed: ' + error.message);
       setResult({
         success: false,
-        response: 'An error occurred. Please try again.'
+        response: error.message
       });
     } finally {
       setLoading(false);
@@ -262,310 +283,332 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 py-8 px-4">
-      <div className="max-w-6xl mx-auto space-y-6">
-        
+      <div className="max-w-6xl mx-auto">
         {/* Header */}
-        <div className="bg-white rounded-lg shadow-lg p-6">
+        <div className="text-center mb-6">
           <h1 className="text-2xl font-bold text-gray-900 mb-2">
             Sales Assignment Algorithm Tester
           </h1>
           <p className="text-gray-600">
-            Test the assignment logic and view detailed execution logs
+            Test the salesperson assignment algorithm with real-time logging and parameter customization
           </p>
         </div>
 
-        {/* Algorithm Parameters Panel */}
-        <div className="bg-white rounded-lg shadow-lg p-6">
+        {/* Algorithm Configuration */}
+        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold text-gray-900">Algorithm Parameters</h2>
+            <h2 className="text-xl font-bold text-gray-900">Algorithm Configuration</h2>
             <button
               onClick={() => setShowParamEditor(!showParamEditor)}
-              className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors"
+              className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors flex items-center"
             >
-              {showParamEditor ? 'Hide Editor' : 'Edit Parameters'}
+              {showParamEditor ? 'Hide' : 'Show'} Parameters
+              <svg 
+                className={`w-4 h-4 ml-1 transition-transform ${showParamEditor ? 'rotate-180' : ''}`}
+                fill="none" 
+                stroke="currentColor" 
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
             </button>
           </div>
 
+          {/* Parameter Display */}
+          {!showParamEditor && (
+            <div className="info-box">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="config-item">
+                  <div className="text-xs text-gray-500 mb-1">Max Travel Time</div>
+                  <div className="font-semibold text-gray-900">{algorithmParams.maxTravelTimeSeconds / 3600}h</div>
+                </div>
+                <div className="config-item">
+                  <div className="text-xs text-gray-500 mb-1">Max Daily Appts</div>
+                  <div className="font-semibold text-gray-900">{algorithmParams.maxAppointmentsPerDay}</div>
+                </div>
+                <div className="config-item">
+                  <div className="text-xs text-gray-500 mb-1">Max New Assigns</div>
+                  <div className="font-semibold text-gray-900">{algorithmParams.maxNewAssignmentsPerDay}</div>
+                </div>
+                <div className="config-item">
+                  <div className="text-xs text-gray-500 mb-1">Min Gap</div>
+                  <div className="font-semibold text-gray-900">{algorithmParams.minGapMinutes}min</div>
+                </div>
+              </div>
+              
+              <div className="mt-4 pt-4 border-t border-blue-200">
+                <div className="text-xs text-gray-500 mb-2">Score Weights</div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  <div className="text-sm">
+                    <span className="text-gray-600">Performance:</span>{' '}
+                    <span className="font-medium">{algorithmParams.weights.performance}</span>
+                  </div>
+                  <div className="text-sm">
+                    <span className="text-gray-600">Proximity:</span>{' '}
+                    <span className="font-medium">{algorithmParams.weights.proximity}</span>
+                  </div>
+                  <div className="text-sm">
+                    <span className="text-gray-600">Capacity:</span>{' '}
+                    <span className="font-medium">{algorithmParams.weights.capacity}</span>
+                  </div>
+                  <div className="text-sm">
+                    <span className="text-gray-600">Route Eff:</span>{' '}
+                    <span className="font-medium">{algorithmParams.weights.routeEfficiency}</span>
+                  </div>
+                </div>
+              </div>
+
+              {hasParamChanges() && (
+                <div className="mt-4 pt-4 border-t border-blue-200">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-blue-600">
+                      ⚠ Custom parameters active
+                    </span>
+                    <button
+                      onClick={resetParams}
+                      className="text-xs text-gray-600 hover:text-gray-900"
+                    >
+                      Reset to defaults
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Parameter Editor */}
           {showParamEditor && (
             <div className="space-y-6">
-              {/* Parameter Changes Summary */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Constraint Parameters */}
+                <div className="space-y-4">
+                  <h3 className="font-semibold text-gray-900 text-sm">Constraint Parameters</h3>
+                  
+                  <div>
+                    <label>Max Travel Time (hours)</label>
+                    <input
+                      type="text"
+                      value={algorithmParams.maxTravelTimeSeconds / 3600}
+                      onChange={(e) => handleParamChange('maxTravelTimeSeconds', parseFloat(e.target.value) * 3600)}
+                      className="w-full"
+                    />
+                  </div>
+
+                  <div>
+                    <label>Max Appointments Per Day</label>
+                    <input
+                      type="text"
+                      value={algorithmParams.maxAppointmentsPerDay}
+                      onChange={(e) => handleParamChange('maxAppointmentsPerDay', e.target.value)}
+                      className="w-full"
+                    />
+                  </div>
+
+                  <div>
+                    <label>Max New Assignments Per Day</label>
+                    <input
+                      type="text"
+                      value={algorithmParams.maxNewAssignmentsPerDay}
+                      onChange={(e) => handleParamChange('maxNewAssignmentsPerDay', e.target.value)}
+                      className="w-full"
+                    />
+                  </div>
+
+                  <div>
+                    <label>Min Gap Between Appointments (minutes)</label>
+                    <input
+                      type="text"
+                      value={algorithmParams.minGapMinutes}
+                      onChange={(e) => handleParamChange('minGapMinutes', e.target.value)}
+                      className="w-full"
+                    />
+                  </div>
+
+                  <div>
+                    <label>Appointment Duration (minutes)</label>
+                    <input
+                      type="text"
+                      value={algorithmParams.appointmentDurationMinutes}
+                      onChange={(e) => handleParamChange('appointmentDurationMinutes', e.target.value)}
+                      className="w-full"
+                    />
+                  </div>
+                </div>
+
+                {/* Weight Parameters */}
+                <div className="space-y-4">
+                  <h3 className="font-semibold text-gray-900 text-sm">Score Weights (must sum to 1.0)</h3>
+                  
+                  <div>
+                    <label>Performance Weight</label>
+                    <input
+                      type="text"
+                      value={algorithmParams.weights.performance}
+                      onChange={(e) => handleParamChange('weights.performance', e.target.value)}
+                      className="w-full"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Weight for conversion rate & success history
+                    </p>
+                  </div>
+
+                  <div>
+                    <label>Proximity Weight</label>
+                    <input
+                      type="text"
+                      value={algorithmParams.weights.proximity}
+                      onChange={(e) => handleParamChange('weights.proximity', e.target.value)}
+                      className="w-full"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Weight for travel distance/time
+                    </p>
+                  </div>
+
+                  <div>
+                    <label>Capacity Weight</label>
+                    <input
+                      type="text"
+                      value={algorithmParams.weights.capacity}
+                      onChange={(e) => handleParamChange('weights.capacity', e.target.value)}
+                      className="w-full"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Weight for available appointment slots
+                    </p>
+                  </div>
+
+                  <div>
+                    <label>Route Efficiency Weight</label>
+                    <input
+                      type="text"
+                      value={algorithmParams.weights.routeEfficiency}
+                      onChange={(e) => handleParamChange('weights.routeEfficiency', e.target.value)}
+                      className="w-full"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Weight for minimizing backtracking
+                    </p>
+                  </div>
+
+                  <div className="pt-3 border-t border-gray-200">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">Current Sum:</span>
+                      <span className={`font-medium ${
+                        Math.abs((
+                          algorithmParams.weights.performance +
+                          algorithmParams.weights.proximity +
+                          algorithmParams.weights.capacity +
+                          algorithmParams.weights.routeEfficiency
+                        ) - 1.0) < 0.01 ? 'text-green-600' : 'text-red-600'
+                      }`}>
+                        {(
+                          algorithmParams.weights.performance +
+                          algorithmParams.weights.proximity +
+                          algorithmParams.weights.capacity +
+                          algorithmParams.weights.routeEfficiency
+                        ).toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {hasParamChanges() && (
-                <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="font-semibold text-blue-900">Active Customizations</h3>
+                <div className="pt-4 border-t border-gray-200">
+                  <div className="flex items-center justify-between bg-blue-50 p-3 rounded-lg">
+                    <span className="text-sm font-medium text-blue-900">
+                      Custom parameters will be sent with your request
+                    </span>
                     <button
                       onClick={resetParams}
                       className="text-sm text-blue-600 hover:text-blue-800 font-medium"
                     >
-                      Reset to Defaults
+                      Reset All
                     </button>
-                  </div>
-                  <div className="space-y-2">
-                    {Object.entries(paramChanges).map(([path, values]) => (
-                      <div key={path} className="flex items-center justify-between text-sm">
-                        <span className="font-medium text-gray-700 capitalize">
-                          {path.replace(/([A-Z])/g, ' $1').replace('.', ' → ')}:
-                        </span>
-                        <span className="text-gray-600">
-                          <span className="line-through">{values.original}</span>
-                          {' → '}
-                          <span className="font-semibold text-blue-600">{values.current}</span>
-                        </span>
-                      </div>
-                    ))}
                   </div>
                 </div>
               )}
-
-              {/* Time & Capacity Limits */}
-              <div>
-                <h3 className="font-semibold text-gray-900 mb-3">Time & Capacity Limits</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Max Travel Time (seconds)
-                    </label>
-                    <input
-                      type="number"
-                      value={algorithmParams.maxTravelTimeSeconds}
-                      onChange={(e) => handleParamChange('maxTravelTimeSeconds', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Default: {DEFAULT_PARAMS.maxTravelTimeSeconds}s (2 hours)
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Max Appointments Per Day
-                    </label>
-                    <input
-                      type="number"
-                      value={algorithmParams.maxAppointmentsPerDay}
-                      onChange={(e) => handleParamChange('maxAppointmentsPerDay', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Default: {DEFAULT_PARAMS.maxAppointmentsPerDay}
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Max New Assignments Per Day
-                    </label>
-                    <input
-                      type="number"
-                      value={algorithmParams.maxNewAssignmentsPerDay}
-                      onChange={(e) => handleParamChange('maxNewAssignmentsPerDay', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Default: {DEFAULT_PARAMS.maxNewAssignmentsPerDay}
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Min Gap Between Appointments (minutes)
-                    </label>
-                    <input
-                      type="number"
-                      value={algorithmParams.minGapMinutes}
-                      onChange={(e) => handleParamChange('minGapMinutes', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Default: {DEFAULT_PARAMS.minGapMinutes} minutes
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Appointment Duration (minutes)
-                    </label>
-                    <input
-                      type="number"
-                      value={algorithmParams.appointmentDurationMinutes}
-                      onChange={(e) => handleParamChange('appointmentDurationMinutes', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Default: {DEFAULT_PARAMS.appointmentDurationMinutes} minutes
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Scoring Weights */}
-              <div>
-                <h3 className="font-semibold text-gray-900 mb-3">Scoring Weights</h3>
-                <p className="text-sm text-gray-600 mb-3">
-                  These weights determine how much each factor contributes to the final score. They should sum to 1.0.
-                  <span className="font-semibold ml-2">
-                    Current sum: {Object.values(algorithmParams.weights).reduce((a, b) => a + b, 0).toFixed(2)}
-                  </span>
-                </p>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Performance Weight
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      max="1"
-                      value={algorithmParams.weights.performance}
-                      onChange={(e) => handleParamChange('weights.performance', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Default: {DEFAULT_PARAMS.weights.performance} (40%)
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Proximity Weight
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      max="1"
-                      value={algorithmParams.weights.proximity}
-                      onChange={(e) => handleParamChange('weights.proximity', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Default: {DEFAULT_PARAMS.weights.proximity} (40%)
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Capacity Weight
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      max="1"
-                      value={algorithmParams.weights.capacity}
-                      onChange={(e) => handleParamChange('weights.capacity', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Default: {DEFAULT_PARAMS.weights.capacity} (5%)
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Route Efficiency Weight
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      max="1"
-                      value={algorithmParams.weights.routeEfficiency}
-                      onChange={(e) => handleParamChange('weights.routeEfficiency', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Default: {DEFAULT_PARAMS.weights.routeEfficiency} (15%)
-                    </p>
-                  </div>
-                </div>
-              </div>
             </div>
           )}
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          
-          {/* Input Form */}
+        {/* Main Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+          {/* Form */}
           <div className="bg-white rounded-lg shadow-lg p-6">
             <h2 className="text-xl font-bold text-gray-900 mb-4">Lead Information</h2>
             
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label htmlFor="firstName">First Name</label>
+                  <label>First Name</label>
                   <input
                     type="text"
-                    id="firstName"
                     name="firstName"
                     value={formData.firstName}
                     onChange={handleInputChange}
                     required
+                    placeholder="John"
                   />
                 </div>
-                
                 <div>
-                  <label htmlFor="lastName">Last Name</label>
+                  <label>Last Name</label>
                   <input
                     type="text"
-                    id="lastName"
                     name="lastName"
                     value={formData.lastName}
                     onChange={handleInputChange}
                     required
+                    placeholder="Doe"
                   />
                 </div>
               </div>
 
               <div>
-                <label htmlFor="phone">Phone Number</label>
+                <label>Phone Number</label>
                 <input
                   type="tel"
-                  id="phone"
                   name="phone"
                   value={formData.phone}
                   onChange={handleInputChange}
-                  placeholder="416-555-1234"
                   required
+                  placeholder="+1 (555) 123-4567"
                 />
               </div>
 
               <div>
-                <label htmlFor="address">Street Address</label>
+                <label>Street Address</label>
                 <input
                   type="text"
-                  id="address"
                   name="address"
                   value={formData.address}
                   onChange={handleInputChange}
-                  placeholder="123 Main St"
+                  required
+                  placeholder="123 Main Street"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label htmlFor="city">City</label>
+                  <label>City</label>
                   <input
                     type="text"
-                    id="city"
                     name="city"
                     value={formData.city}
                     onChange={handleInputChange}
-                    placeholder="Toronto"
                     required
+                    placeholder="Toronto"
                   />
                 </div>
-                
                 <div>
-                  <label htmlFor="postalCode">Postal Code</label>
+                  <label>Postal Code</label>
                   <input
                     type="text"
-                    id="postalCode"
                     name="postalCode"
                     value={formData.postalCode}
                     onChange={handleInputChange}
+                    required
                     placeholder="M5V 3A8"
                   />
                 </div>
@@ -573,24 +616,23 @@ function App() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label htmlFor="appointmentDate">Appointment Date</label>
+                  <label>Appointment Date</label>
                   <input
                     type="date"
-                    id="appointmentDate"
                     name="appointmentDate"
                     value={formData.appointmentDate}
                     onChange={handleInputChange}
+                    required
                   />
                 </div>
-                
                 <div>
-                  <label htmlFor="appointmentTime">Appointment Time</label>
+                  <label>Appointment Time</label>
                   <input
                     type="time"
-                    id="appointmentTime"
                     name="appointmentTime"
                     value={formData.appointmentTime}
                     onChange={handleInputChange}
+                    required
                   />
                 </div>
               </div>
@@ -657,6 +699,137 @@ function App() {
             </div>
           </div>
         </div>
+
+        {/* Top 3 Candidates Display */}
+        {topCandidates.length > 0 && (
+          <div className="mb-6">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Top 3 Candidates</h2>
+            
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              {topCandidates.map((candidate, index) => (
+                <div
+                  key={index}
+                  className={`candidate-card ${candidate.isChosen ? 'chosen' : ''}`}
+                >
+                  {/* Rank Badge */}
+                  <div className={`candidate-rank-badge rank-${candidate.rank}`}>
+                    {candidate.rank}
+                  </div>
+
+                  {/* Chosen Badge */}
+                  {candidate.isChosen && (
+                    <div className="candidate-chosen-badge">
+                      <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                      CHOSEN
+                    </div>
+                  )}
+
+                  {/* Candidate Name */}
+                  <h3 className="candidate-name">{candidate.name}</h3>
+
+                  {/* Final Score Box */}
+                  <div className={`candidate-score-box ${candidate.isChosen ? 'chosen' : ''}`}>
+                    <div className="candidate-score-label">Final Score</div>
+                    <div className="candidate-score-value">
+                      {parseFloat(candidate.scores.final).toFixed(4)}
+                    </div>
+                  </div>
+
+                  {/* Score Metrics */}
+                  <div>
+                    {/* Performance */}
+                    <div className="candidate-metric">
+                      <div className="candidate-metric-header">
+                        <span className="candidate-metric-label">Performance</span>
+                        <span className="candidate-metric-value">
+                          {parseFloat(candidate.scores.performance).toFixed(4)}
+                        </span>
+                      </div>
+                      <div className="candidate-bar-container">
+                        <div 
+                          className="candidate-bar performance"
+                          style={{ width: `${Math.min(parseFloat(candidate.scores.performance) * 100, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Proximity */}
+                    <div className="candidate-metric">
+                      <div className="candidate-metric-header">
+                        <span className="candidate-metric-label">Proximity</span>
+                        <span className="candidate-metric-value">
+                          {parseFloat(candidate.scores.proximity).toFixed(4)}
+                        </span>
+                      </div>
+                      <div className="candidate-bar-container">
+                        <div 
+                          className="candidate-bar proximity"
+                          style={{ width: `${Math.min(parseFloat(candidate.scores.proximity) * 100, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Capacity */}
+                    <div className="candidate-metric">
+                      <div className="candidate-metric-header">
+                        <span className="candidate-metric-label">Capacity</span>
+                        <span className="candidate-metric-value">
+                          {parseFloat(candidate.scores.capacity).toFixed(4)}
+                        </span>
+                      </div>
+                      <div className="candidate-bar-container">
+                        <div 
+                          className="candidate-bar capacity"
+                          style={{ width: `${Math.min(parseFloat(candidate.scores.capacity) * 100, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Route Efficiency */}
+                    <div className="candidate-metric">
+                      <div className="candidate-metric-header">
+                        <span className="candidate-metric-label">Route Efficiency</span>
+                        <span className="candidate-metric-value">
+                          {parseFloat(candidate.scores.routeEfficiency).toFixed(4)}
+                        </span>
+                      </div>
+                      <div className="candidate-bar-container">
+                        <div 
+                          className="candidate-bar route"
+                          style={{ width: `${Math.min(parseFloat(candidate.scores.routeEfficiency) * 100, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Additional Details */}
+                  <div className="candidate-details">
+                    <div className="candidate-details-grid">
+                      <div className="candidate-detail-box">
+                        <div className="candidate-detail-label">Travel Time</div>
+                        <div className="candidate-detail-value">{candidate.travelTime}</div>
+                      </div>
+                      <div className="candidate-detail-box">
+                        <div className="candidate-detail-label">Appointments</div>
+                        <div className="candidate-detail-value">
+                          {candidate.appointmentsOnDate}/{algorithmParams.maxAppointmentsPerDay}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="candidate-detail-box">
+                      <div className="candidate-detail-label">Today's Assignments</div>
+                      <div className="candidate-detail-value">
+                        {candidate.todayAssignments}/{algorithmParams.maxNewAssignmentsPerDay}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Results Panel */}
         {result && (

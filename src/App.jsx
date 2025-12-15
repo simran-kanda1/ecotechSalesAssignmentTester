@@ -161,61 +161,99 @@ function App() {
 
       const data = await response.json();
 
-      addLog('success', 'Received response from server');
+      addLog('success', '✅ Received response from server');
+      
+      // Log the service area determination
+      if (formData.city) {
+        addLog('info', `📍 Lead Location: ${formData.city}`);
+      }
 
       // Parse and display detailed results
       if (data.success) {
-        addLog('success', `✓ Successfully assigned to ${data.salesperson}`);
+        addLog('success', `✅ Successfully assigned to ${data.salesperson}`);
+        
+        if (data.backToBackAssignment) {
+          addLog('info', '🎯 BACK-TO-BACK ASSIGNMENT: This lead was scheduled immediately after an existing appointment');
+          if (data.adjustedTime) {
+            addLog('info', `⏰ Time adjusted to: ${data.adjustedTime} (for optimal routing)`);
+          }
+        }
         
         if (data.assignmentDetails) {
           const details = data.assignmentDetails;
           
-          addLog('info', 'Assignment Analysis:', {
-            'Travel Time': details.travelTime,
-            'Travel From': details.travelFrom,
-            'Appointments on Date': details.appointmentsOnDate,
-            'Today\'s Assignments': details.todayAssignments,
-            'Final Score': details.scores.final
-          });
+          addLog('info', '📊 Assignment Analysis:');
+          addLog('info', `   🚗 Travel Time: ${details.travelTime}`);
+          addLog('info', `   📍 Travel From: ${details.travelFrom}`);
+          addLog('info', `   📅 Appointments on Date: ${details.appointmentsOnDate}`);
+          addLog('info', `   🆕 Today's New Assignments: ${details.todayAssignments}`);
+          
+          if (details.backToBackConvenience) {
+            addLog('info', '   🎯 Back-to-back convenience detected');
+          }
 
-          addLog('info', 'Score Breakdown:', {
-            'Performance': `${details.scores.performance} × ${algorithmParams.weights.performance} = ${(parseFloat(details.scores.performance) * algorithmParams.weights.performance).toFixed(4)}`,
-            'Proximity': `${details.scores.proximity} × ${algorithmParams.weights.proximity} = ${(parseFloat(details.scores.proximity) * algorithmParams.weights.proximity).toFixed(4)}`,
-            'Capacity': `${details.scores.capacity} × ${algorithmParams.weights.capacity} = ${(parseFloat(details.scores.capacity) * algorithmParams.weights.capacity).toFixed(4)}`,
-            'Route Efficiency': `${details.scores.routeEfficiency} × ${algorithmParams.weights.routeEfficiency} = ${(parseFloat(details.scores.routeEfficiency) * algorithmParams.weights.routeEfficiency).toFixed(4)}`
-          });
+          addLog('info', '🎯 Score Breakdown:');
+          const perf = parseFloat(details.scores.performance);
+          const prox = parseFloat(details.scores.proximity);
+          const cap = parseFloat(details.scores.capacity);
+          const route = parseFloat(details.scores.routeEfficiency);
+          
+          addLog('info', `   📈 Performance: ${details.scores.performance} × ${algorithmParams.weights.performance} = ${(perf * algorithmParams.weights.performance).toFixed(4)}`);
+          addLog('info', `   📍 Proximity: ${details.scores.proximity} × ${algorithmParams.weights.proximity} = ${(prox * algorithmParams.weights.proximity).toFixed(4)}`);
+          addLog('info', `   💼 Capacity: ${details.scores.capacity} × ${algorithmParams.weights.capacity} = ${(cap * algorithmParams.weights.capacity).toFixed(4)}`);
+          addLog('info', `   🗺️ Route Efficiency: ${details.scores.routeEfficiency} × ${algorithmParams.weights.routeEfficiency} = ${(route * algorithmParams.weights.routeEfficiency).toFixed(4)}`);
+          addLog('success', `   🏆 Final Score: ${details.scores.final}`);
         }
 
         if (data.allEvaluations) {
-          addLog('info', `Evaluated ${data.allEvaluations.length} salespeople total`);
+          addLog('info', `📊 Evaluated ${data.allEvaluations.length} salespeople total`);
           
           const qualified = data.allEvaluations.filter(e => !e.disqualified);
           const disqualified = data.allEvaluations.filter(e => e.disqualified);
           
-          addLog('info', `${qualified.length} qualified, ${disqualified.length} disqualified`);
+          addLog('info', `   ✅ Qualified: ${qualified.length}`);
+          addLog('info', `   ❌ Disqualified: ${disqualified.length}`);
           
           if (disqualified.length > 0) {
             const disqualificationReasons = {};
             disqualified.forEach(e => {
               const reason = e.disqualificationReason || 'Unknown';
-              disqualificationReasons[reason] = (disqualificationReasons[reason] || 0) + 1;
+              const reasonText = reason.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+              disqualificationReasons[reasonText] = (disqualificationReasons[reasonText] || 0) + 1;
             });
             
-            addLog('info', 'Disqualification Summary:', disqualificationReasons);
+            addLog('info', '📋 Disqualification reasons:');
+            Object.entries(disqualificationReasons).forEach(([reason, count]) => {
+              addLog('info', `   • ${reason}: ${count}`);
+            });
           }
 
-          // Get top 3 candidates
+          // Get top candidates
           const sortedQualified = qualified.sort((a, b) => 
-            parseFloat(b.scores.final) - parseFloat(a.scores.final)
+            parseFloat(b.scores.final || 0) - parseFloat(a.scores.final || 0)
           );
-          const top3 = sortedQualified.slice(0, 3).map((candidate, index) => ({
-            ...candidate,
-            rank: index + 1,
-            isChosen: candidate.name === data.salesperson
-          }));
+          const topN = sortedQualified.slice(0, 5);
           
-          setTopCandidates(top3);
-          addLog('info', `Top 3 Candidates: ${top3.map(c => `${c.rank}. ${c.name} (${c.scores.final})`).join(', ')}`);
+          if (topN.length > 0) {
+            setTopCandidates(topN.map((candidate, index) => ({
+              rank: index + 1,
+              name: candidate.name,
+              userId: candidate.userId,
+              finalScore: candidate.scores.final?.toFixed(4) || '0.0000',
+              scores: candidate.scores,
+              travelTime: candidate.details?.travelText || 'N/A',
+              appointmentsOnDate: candidate.details?.appointmentCount || 0,
+              todayAssignments: candidate.details?.todayAssignments || 0,
+              isChosen: candidate.name === data.salesperson
+            })));
+            
+            addLog('success', `🏆 Top ${topN.length} candidates ranked:`);
+            topN.forEach((c, i) => {
+              const emoji = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '  ';
+              const chosen = c.name === data.salesperson ? ' ✅ CHOSEN' : '';
+              addLog('info', `   ${emoji} ${i + 1}. ${c.name} - Score: ${c.scores.final?.toFixed(4) || 'N/A'}${chosen}`);
+            });
+          }
         }
 
         setResult({
@@ -226,32 +264,66 @@ function App() {
         });
 
       } else {
-        addLog('error', data.response || 'Assignment failed');
+        // Handle assignment failure
+        addLog('error', '❌ No qualified salesperson found');
+        
+        if (data.reason) {
+          const reasonText = data.reason.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+          addLog('info', `📋 Reason: ${reasonText}`);
+        }
         
         if (data.allEvaluations) {
           const disqualified = data.allEvaluations.filter(e => e.disqualified);
-          addLog('error', `All ${disqualified.length} candidates were disqualified`);
+          const qualified = data.allEvaluations.filter(e => !e.disqualified);
           
-          const reasons = {};
-          disqualified.forEach(e => {
-            const reason = e.disqualificationReason || 'Unknown';
-            reasons[reason] = (reasons[reason] || 0) + 1;
-          });
-          addLog('error', 'Reasons:', reasons);
+          addLog('info', `📊 Evaluated ${data.allEvaluations.length} salespeople total`);
+          addLog('info', `   ✅ Qualified: ${qualified.length}`);
+          addLog('info', `   ❌ Disqualified: ${disqualified.length}`);
+          
+          if (disqualified.length > 0) {
+            // Group by reason
+            const reasons = {};
+            disqualified.forEach(e => {
+              const reason = e.disqualificationReason || 'unknown';
+              if (!reasons[reason]) {
+                reasons[reason] = [];
+              }
+              reasons[reason].push(e.name);
+            });
+            
+            addLog('info', '📋 Disqualification breakdown:');
+            Object.entries(reasons).forEach(([reason, names]) => {
+              const reasonText = reason.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+              addLog('info', `   • ${reasonText}: ${names.join(', ')}`);
+            });
+          }
+          
+          // Show qualified candidates if any exist but weren't chosen
+          if (qualified.length > 0) {
+            const sortedQualified = qualified.sort((a, b) => 
+              parseFloat(b.scores.final || 0) - parseFloat(a.scores.final || 0)
+            );
+            
+            addLog('info', '🏆 Qualified candidates ranked:');
+            sortedQualified.slice(0, 5).forEach((c, i) => {
+              addLog('info', `   ${i + 1}. ${c.name} - Score: ${c.scores.final?.toFixed(4) || 'N/A'}`);
+            });
+          }
         }
         
+        // Set the result with the proper message from backend
         setResult({
           success: false,
-          response: data.response || 'No suitable salesperson could be assigned'
+          response: data.response || 'Great, we will have someone from our team reach out to confirm the date and time of the appointment.'
         });
       }
 
     } catch (error) {
       console.error('Error:', error);
-      addLog('error', 'Request failed: ' + error.message);
+      addLog('error', `❌ Request failed: ${error.message}`);
       setResult({
         success: false,
-        response: error.message
+        response: 'An error occurred while processing the assignment. Please try again.'
       });
     } finally {
       setLoading(false);
@@ -836,19 +908,19 @@ function App() {
           <div className="bg-white rounded-lg shadow-lg p-6">
             <h2 className="text-xl font-bold text-gray-900 mb-4">Assignment Result</h2>
             
-            <div className={`status-badge ${result.success ? 'status-success' : 'status-error'} mb-4`}>
+            <div className={`status-badge ${result.success ? 'status-success' : 'info-box'} mb-4`}>
               <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 {result.success ? (
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 )}
               </svg>
-              {result.success ? 'Assignment Successful' : 'Assignment Failed'}
+              {result.success ? 'Assignment Successful' : 'Manual Follow-up Required'}
             </div>
 
             <div className="space-y-4">
-              <p className="text-gray-700">{result.response}</p>
+              <p className="text-gray-700 text-lg">{result.response}</p>
 
               {result.success && result.assignmentDetails && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-gray-200">
